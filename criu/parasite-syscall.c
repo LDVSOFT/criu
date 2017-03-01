@@ -1465,7 +1465,7 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 	struct parasite_ctl *ctl;
 	unsigned long p, map_exchange_size, parasite_size;
 
-	BUG_ON(item->threads[0].real != pid);
+//	BUG_ON(item->threads[0].real != pid);  // Should use trace_id
 
 	p = get_exec_start(vma_area_list);
 	if (!p) {
@@ -1473,6 +1473,7 @@ struct parasite_ctl *parasite_infect_seized(pid_t pid, struct pstree_item *item,
 		return NULL;
 	}
 
+	pr_info("!!! pid=%d\n", pid);
 	ctl = parasite_prep_ctl(pid, p);
 	if (!ctl)
 		return NULL;

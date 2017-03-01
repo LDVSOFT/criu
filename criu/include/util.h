@@ -72,6 +72,7 @@ extern int set_proc_fd(int fd);
 #define PROC_NONE	-2
 
 extern int do_open_proc(pid_t pid, int flags, const char *fmt, ...);
+extern int do_open_proc_tid(pid_t pid, pid_t tid, int flags, const char *fmt, ...);
 
 #define __open_proc(pid, ier, flags, fmt, ...)				\
 	({								\
@@ -84,6 +85,20 @@ extern int do_open_proc(pid_t pid, int flags, const char *fmt, ...);
 		__fd;							\
 	})
 
+#define __open_proc_tid(pid, tid, ier, flags, fmt, ...)			\
+	({								\
+		int __fd = do_open_proc_tid(				\
+				pid, tid,				\
+				flags, fmt, ##__VA_ARGS__		\
+			);						\
+		if (__fd < 0 && (errno != (ier)))			\
+			pr_perror("Can't open %d/task/%d/" fmt " on "	\
+					"procfs",			\
+					pid, tid, ##__VA_ARGS__);	\
+									\
+		__fd;							\
+	 })
+
 /* int open_proc(pid_t pid, const char *fmt, ...); */
 #define open_proc(pid, fmt, ...)				\
 	__open_proc(pid, 0, O_RDONLY, fmt, ##__VA_ARGS__)
@@ -94,6 +109,17 @@ extern int do_open_proc(pid_t pid, int flags, const char *fmt, ...);
 
 #define open_proc_path(pid, fmt, ...)				\
 	__open_proc(pid, 0, O_PATH, fmt, ##__VA_ARGS__)
+
+/* int open_proc_tid(pid_t pid, pid_t tid, const char *fmt, ...); */
+#define open_proc_tid(pid, tid, fmt, ...)			\
+	__open_proc_tid(pid, tid, 0, O_RDONLY, fmt, ##__VA_ARGS__)
+
+/* int open_proc_tid_rw(pid_t pid, pid_t tid, const char *fmt, ...); */
+#define open_proc_tid_rw(pid, tid, fmt, ...)			\
+	__open_proc_tid(pid, tid, 0, O_RDWR, fmt, ##__VA_ARGS__)
+
+#define open_proc_tid_path(pid, tid, fmt, ...)			\
+	__open_proc_tid(pid, tid, 0, O_PATH, fmt, ##__VA_ARGS__)
 
 /* DIR *opendir_proc(pid_t pid, const char *fmt, ...); */
 #define opendir_proc(pid, fmt, ...)					\
@@ -127,6 +153,37 @@ extern int do_open_proc(pid_t pid, int flags, const char *fmt, ...);
 		__f;							\
 	 })
 
+/* DIR *opendir_proc_tid(pid_t pid, pid_t tid, const char *fmt, ...); */
+#define opendir_proc_tid(pid, tid, fmt, ...)				\
+	({								\
+		int __fd = open_proc_tid(pid, tid, fmt, ##__VA_ARGS__);	\
+		DIR *__d = NULL;					\
+									\
+		if (__fd >= 0) {					\
+			__d = fdopendir(__fd);				\
+			if (__d == NULL)				\
+				pr_perror("Can't fdopendir %d "		\
+					"(%d/" fmt " on procfs)",	\
+					__fd, pid, ##__VA_ARGS__);	\
+		}							\
+		__d;							\
+	 })
+
+/* FILE *fopen_proc(pid_t pid, const char *fmt, ...); */
+#define fopen_proc(pid, fmt, ...)					\
+	({								\
+		int __fd = open_proc(pid,  fmt, ##__VA_ARGS__);		\
+		FILE *__f = NULL;					\
+									\
+		if (__fd >= 0) {					\
+			__f = fdopen(__fd, "r");			\
+			if (__f == NULL)				\
+				pr_perror("Can't fdopen %d "		\
+					"(%d/" fmt " on procfs)",	\
+					__fd, pid, ##__VA_ARGS__);	\
+		}							\
+		__f;							\
+	 })
 #define DEVZERO		(makedev(1, 5))
 
 #define KDEV_MINORBITS	20

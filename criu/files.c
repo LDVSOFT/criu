@@ -304,7 +304,7 @@ int fill_fdlink(int lfd, const struct fd_parms *p, struct fd_link *link)
 	return 0;
 }
 
-static int fill_fd_params(struct pid *owner_pid, int fd, int lfd,
+static int fill_fd_params(struct pid *owner_pid, int tid, int fd, int lfd,
 				struct fd_opts *opts, struct fd_parms *p)
 {
 	int ret;
@@ -321,7 +321,7 @@ static int fill_fd_params(struct pid *owner_pid, int fd, int lfd,
 		return -1;
 	}
 
-	if (parse_fdinfo_pid(owner_pid->real, fd, FD_TYPES__UND, NULL, &fdinfo))
+	if (parse_fdinfo_tid(owner_pid->real, tid, fd, FD_TYPES__UND, NULL, &fdinfo))
 		return -1;
 
 	p->fs_type	= fsbuf.f_type;
@@ -329,7 +329,7 @@ static int fill_fd_params(struct pid *owner_pid, int fd, int lfd,
 	p->pos		= fdinfo.pos;
 	p->flags	= fdinfo.flags;
 	p->mnt_id	= fdinfo.mnt_id;
-	p->pid		= owner_pid->real;
+	p->pid		= tid;
 	p->fd_flags	= opts->flags;
 
 	fown_entry__init(&p->fown);
@@ -425,14 +425,14 @@ static int dump_chrdev(struct fd_parms *p, int lfd, struct cr_img *img)
 	return do_dump_gen_file(p, lfd, ops, img);
 }
 
-static int dump_one_file(struct pid *pid, int fd, int lfd, struct fd_opts *opts,
+static int dump_one_file(struct pid *pid, int tid, int fd, int lfd, struct fd_opts *opts,
 		       struct cr_img *img, struct parasite_ctl *ctl)
 {
 	struct fd_parms p = FD_PARMS_INIT;
 	const struct fdtype_ops *ops;
 	struct fd_link link;
 
-	if (fill_fd_params(pid, fd, lfd, opts, &p) < 0) {
+	if (fill_fd_params(pid, tid, fd, lfd, opts, &p) < 0) {
 		pr_err("Can't get stat on %d\n", fd);
 		return -1;
 	}
@@ -542,7 +542,7 @@ int dump_task_files_seized(struct parasite_ctl *ctl, struct pstree_item *item,
 			goto err;
 
 		for (i = 0; i < nr_fds; i++) {
-			ret = dump_one_file(&item->pid, dfds->fds[i + off],
+			ret = dump_one_file(&item->pid, item->trace_pid, dfds->fds[i + off],
 						lfds[i], opts + i, img, ctl);
 			close(lfds[i]);
 			if (ret)

@@ -650,7 +650,7 @@ static int vma_list_add(struct vma_area *vma_area,
 	return 0;
 }
 
-int parse_smaps(pid_t pid, struct vm_area_list *vma_area_list,
+int parse_smaps(pid_t pid, pid_t tid, struct vm_area_list *vma_area_list,
 					dump_filemap_t dump_filemap)
 {
 	struct vma_area *vma_area = NULL;
@@ -670,7 +670,7 @@ int parse_smaps(pid_t pid, struct vm_area_list *vma_area_list,
 	vma_area_list->shared_longest = 0;
 	INIT_LIST_HEAD(&vma_area_list->h);
 
-	f.fd = open_proc(pid, "smaps");
+	f.fd = open_proc_tid(pid, tid, "smaps");
 	if (f.fd < 0)
 		goto err_n;
 
@@ -1616,7 +1616,7 @@ nodata:
 
 static int parse_file_lock_buf(char *buf, struct file_lock *fl,
 				bool is_blocked);
-static int parse_fdinfo_pid_s(int pid, int fd, int type,
+static int parse_fdinfo_pid_s(int pid, int tid, int fd, int type,
 		int (*cb)(union fdinfo_entries *e, void *arg), void *arg)
 {
 	struct bfd f;
@@ -1624,7 +1624,7 @@ static int parse_fdinfo_pid_s(int pid, int fd, int type,
 	bool entry_met = false;
 	int ret, exit_code = -1;;
 
-	f.fd = open_proc(pid, "fdinfo/%d", fd);
+	f.fd = open_proc_tid(pid, tid, "fdinfo/%d", fd);
 	if (f.fd < 0) {
 		pr_perror("Can't open fdinfo/%d to parse", fd);
 		return -1;
@@ -1932,13 +1932,19 @@ out:
 int parse_fdinfo_pid(int pid, int fd, int type,
 		int (*cb)(union fdinfo_entries *e, void *arg), void *arg)
 {
-	return parse_fdinfo_pid_s(pid, fd, type, cb, arg);
+	return parse_fdinfo_pid_s(pid, pid, fd, type, cb, arg);
+}
+
+int parse_fdinfo_tid(int pid, int tid, int fd, int type,
+		int (*cb)(union fdinfo_entries *e, void *arg), void *arg)
+{
+	return parse_fdinfo_pid_s(pid, tid, fd, type, cb, arg);
 }
 
 int parse_fdinfo(int fd, int type,
 		int (*cb)(union fdinfo_entries *e, void *arg), void *arg)
 {
-	return parse_fdinfo_pid_s(PROC_SELF, fd, type, cb, arg);
+	return parse_fdinfo_pid_s(PROC_SELF, PROC_SELF, fd, type, cb, arg);
 }
 
 int get_fd_mntid(int fd, int *mnt_id)

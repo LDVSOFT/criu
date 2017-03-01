@@ -382,6 +382,31 @@ int do_open_proc(pid_t pid, int flags, const char *fmt, ...)
 	return openat(dirfd, path, flags);
 }
 
+int do_open_proc_tid(pid_t pid, pid_t tid, int flags, const char *fmt, ...)
+{
+	char path[128];
+	va_list args;
+	int dirfd, subdirfd, fd;
+
+	dirfd = open_pid_proc(pid);
+	if (dirfd < 0)
+		return -1;
+
+	snprintf(path, sizeof(path), "task/%d", (tid == PROC_SELF) ? getpid() : tid);
+
+	subdirfd = openat(dirfd, path, O_PATH);
+	if (subdirfd < 0)
+		return -1;
+
+	va_start(args, fmt);
+	vsnprintf(path, sizeof(path), fmt, args);
+	va_end(args);
+
+	fd = openat(subdirfd, path, flags);
+	close(subdirfd);
+	return fd;
+}
+
 static int service_fd_rlim_cur;
 static int service_fd_id = 0;
 

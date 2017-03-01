@@ -39,7 +39,7 @@ static inline void pmc_zap(pmc_t *pmc)
 	pmc->start = pmc->end = 0;
 }
 
-int pmc_init(pmc_t *pmc, pid_t pid, const struct list_head *vma_head, size_t size)
+int pmc_init(pmc_t *pmc, pid_t pid, pid_t tid, const struct list_head *vma_head, size_t size)
 {
 	size_t map_size = max(size, (size_t)PMC_SIZE);
 	pmc_reset(pmc);
@@ -72,7 +72,7 @@ int pmc_init(pmc_t *pmc, pid_t pid, const struct list_head *vma_head, size_t siz
 		pr_err("No pagemap for %d available\n", pid);
 		goto err;
 	} else {
-		pmc->fd = open_proc(pid, "pagemap");
+		pmc->fd = open_proc_tid(pid, tid, "pagemap");
 		if (pmc->fd < 0)
 			goto err;
 	}

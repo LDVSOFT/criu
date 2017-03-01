@@ -309,7 +309,7 @@ static int __parasite_dump_pages_seized(struct pstree_item *item,
 
 	pmc_size = max(vma_area_list->priv_longest,
 		vma_area_list->shared_longest);
-	if (pmc_init(&pmc, item->pid.real, &vma_area_list->h,
+	if (pmc_init(&pmc, item->pid.real, item->trace_pid, &vma_area_list->h,
 			 pmc_size * PAGE_SIZE))
 		return -1;
 

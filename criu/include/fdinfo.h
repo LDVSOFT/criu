@@ -54,5 +54,7 @@ extern int parse_fdinfo(int fd, int type,
 		int (*cb)(union fdinfo_entries *e, void *arg), void *arg);
 extern int parse_fdinfo_pid(int pid, int fd, int type,
 		int (*cb)(union fdinfo_entries *e, void *arg), void *arg);
+extern int parse_fdinfo_tid(int pid, int tid, int fd, int type,
+		int (*cb)(union fdinfo_entries *e, void *arg), void *arg);
 
 #endif

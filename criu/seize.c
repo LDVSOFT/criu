@@ -458,24 +458,25 @@ static int collect_children(struct pstree_item *item)
 			goto free;
 		}
 
+		/*
 		if (!opts.freeze_cgroup)
-			/* fails when meets a zombie */
+			/ * fails when meets a zombie * /
 			seize_catch_task(pid);
 
 		ret = seize_wait_task(pid, item->pid.real, &dmpi(c)->pi_creds);
 		if (ret < 0) {
-			/*
+			/ *
 			 * Here is a race window between parse_children() and seize(),
 			 * so the task could die for these time.
 			 * Don't worry, will try again on the next attempt. The number
 			 * of attempts is restricted, so it will exit if something
 			 * really wrong.
-			 */
+			 * /
 			ret = 0;
 			xfree(c);
 			continue;
 		}
-
+		*/
 		c->pid.real = pid;
 		c->parent = item;
 		c->pid.state = ret;
@@ -495,22 +496,21 @@ static void unseize_task_and_threads(const struct pstree_item *item, int st)
 {
 	int i;
 
-	if (item->pid.state == TASK_DEAD)
-		return;
-
 	/*
 	 * The st is the state we want to switch tasks into,
 	 * the item->state is the state task was in when we seized one.
 	 */
 
-	unseize_task(item->pid.real, item->pid.state, st);
+	if (item->pid.state != TASK_DEAD)
+		unseize_task(item->pid.real, item->pid.state, st);
 
-	if (st == TASK_DEAD)
-		return;
+	//if (st == TASK_DEAD)
+	//	return;
 
 	for (i = 1; i < item->nr_threads; i++)
-		if (ptrace(PTRACE_DETACH, item->threads[i].real, NULL, NULL))
-			pr_perror("Unable to detach from %d", item->threads[i].real);
+		if (item->threads[i].state != TASK_DEAD)
+			if (ptrace(PTRACE_DETACH, item->threads[i].real, NULL, NULL))
+				pr_perror("Unable to detach from %d", item->threads[i].real);
 }
 
 static void pstree_wait(struct pstree_item *root_item)
@@ -520,10 +520,9 @@ static void pstree_wait(struct pstree_item *root_item)
 
 	for_each_pstree_item(item) {
 
-		if (item->pid.state == TASK_DEAD)
-			continue;
-
 		for (i = 0; i < item->nr_threads; i++) {
+			if (item->threads[i].state == TASK_DEAD)
+				continue;
 			pid = wait4(-1, &status, __WALL, NULL);
 			if (pid < 0) {
 				pr_perror("wait4 failed");
@@ -581,9 +580,6 @@ static inline bool thread_collected(struct pstree_item *i, pid_t tid)
 {
 	int t;
 
-	if (i->pid.real == tid) /* thread leader is collected as task */
-		return true;
-
 	for (t = 0; t < i->nr_threads; t++)
 		if (tid == i->threads[t].real)
 			return true;
@@ -595,14 +591,14 @@ static int collect_threads(struct pstree_item *item)
 {
 	struct pid *threads = NULL;
 	int nr_threads = 0, i = 0, ret, nr_inprogress, nr_stopped = 0;
+	pid_t first_alive = item->trace_pid;
 
 	ret = parse_threads(item->pid.real, &threads, &nr_threads);
 	if (ret < 0)
 		goto err;
 
 	if ((item->pid.state == TASK_DEAD) && (nr_threads > 1)) {
-		pr_err("Zombies with threads are not supported\n");
-		goto err;
+		pr_err("Zombies with threads were not supported\n");
 	}
 
 	/* The number of threads can't be less than already frozen */
@@ -610,17 +606,14 @@ static int collect_threads(struct pstree_item *item)
 	if (item->threads == NULL)
 		return -1;
 
-	if (item->nr_threads == 0) {
-		item->threads[0].real = item->pid.real;
-		item->nr_threads = 1;
-	}
-
 	nr_inprogress = 0;
 	for (i = 0; i < nr_threads; i++) {
 		pid_t pid = threads[i].real;
-
-		if (thread_collected(item, pid))
+		pr_warn("I SEE %d; item->n = %d\n", pid, item->nr_threads);
+		if (thread_collected(item, pid)) {
+			pr_warn("  IT IS COLLECTED!\n");
 			continue;
+		}
 
 		nr_inprogress++;
 
@@ -628,10 +621,11 @@ static int collect_threads(struct pstree_item *item)
 				item->pid.real, pid);
 
 		if (!opts.freeze_cgroup && seize_catch_task(pid))
-			continue;
+			(void) 0;
 
 		ret = seize_wait_task(pid, item_ppid(item), &dmpi(item)->pi_creds);
-		if (ret < 0) {
+		pr_warn("%d: ret=%d\n", pid, ret);
+		if (false && ret < 0) {
 			/*
 			 * Here is a race window between parse_threads() and seize(),
 			 * so the task could die for these time.
@@ -644,18 +638,25 @@ static int collect_threads(struct pstree_item *item)
 
 		BUG_ON(item->nr_threads + 1 > nr_threads);
 		item->threads[item->nr_threads].real = pid;
+		item->threads[item->nr_threads].state = ret;
 		item->nr_threads++;
 
 		if (ret == TASK_DEAD) {
-			pr_err("Zombie thread not supported\n");
-			goto err;
+			pr_err("Zombie thread was not supported\n");
+//			goto err;
+		} else if (first_alive == 0) {
+			first_alive = pid;
 		}
+
+		if (pid == item->pid.real)
+			item->pid.state = ret;
 
 		if (ret == TASK_STOPPED) {
 			nr_stopped++;
 		}
 	}
 
+	item->trace_pid = first_alive;
 	if (nr_stopped && nr_stopped != nr_inprogress) {
 		pr_err("Individually stopped threads not supported\n");
 		goto err;
@@ -708,6 +709,7 @@ static int collect_task(struct pstree_item *item)
 {
 	int ret;
 
+	item->trace_pid = 0;
 	ret = collect_loop(item, collect_threads);
 	if (ret < 0)
 		goto err_close;
@@ -717,7 +719,7 @@ static int collect_task(struct pstree_item *item)
 	if (ret < 0)
 		goto err_close;
 
-	if ((item->pid.state == TASK_DEAD) && !list_empty(&item->children)) {
+	if ((item->trace_pid == 0) && !list_empty(&item->children)) {
 		pr_err("Zombie with children?! O_o Run, run, run!\n");
 		goto err_close;
 	}
@@ -725,7 +727,7 @@ static int collect_task(struct pstree_item *item)
 	if (pstree_alloc_cores(item))
 		goto err_close;
 
-	pr_info("Collected %d in %d state\n", item->pid.real, item->pid.state);
+	pr_info("Collected %d in %d state; trace_pid = %d\n", item->pid.real, item->pid.state, item->trace_pid);
 	return 0;
 
 err_close:
@@ -735,9 +737,10 @@ err_close:
 
 int collect_pstree(void)
 {
-	pid_t pid = root_item->pid.real;
+	//pid_t pid = root_item->pid.real;
 	int ret = -1;
 
+	pr_warn("I AM COLLECTING\n");
 	timing_start(TIME_FREEZING);
 
 	/*
@@ -749,17 +752,6 @@ int collect_pstree(void)
 
 	if (opts.freeze_cgroup && freeze_processes())
 		goto err;
-
-	if (!opts.freeze_cgroup && seize_catch_task(pid)) {
-		set_cr_errno(ESRCH);
-		goto err;
-	}
-
-	ret = seize_wait_task(pid, -1, &dmpi(root_item)->pi_creds);
-	if (ret < 0)
-		goto err;
-	pr_info("Seized task %d, state %d\n", pid, ret);
-	root_item->pid.state = ret;
 
 	ret = collect_task(root_item);
 	if (ret < 0)

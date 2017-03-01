@@ -103,13 +103,19 @@ void free_mappings(struct vm_area_list *vma_area_list)
 int collect_mappings(pid_t pid, struct vm_area_list *vma_area_list,
 						dump_filemap_t dump_file)
 {
+	return collect_mappings_tid(pid, pid, vma_area_list, dump_file);
+}
+
+int collect_mappings_tid(pid_t pid, pid_t tid, struct vm_area_list *vma_area_list,
+						dump_filemap_t dump_file)
+{
 	int ret = -1;
 
 	pr_info("\n");
-	pr_info("Collecting mappings (pid: %d)\n", pid);
+	pr_info("Collecting mappings (pid: %d; tid: %d)\n", pid, tid);
 	pr_info("----------------------------------------\n");
 
-	ret = parse_smaps(pid, vma_area_list, dump_file);
+	ret = parse_smaps(pid, tid, vma_area_list, dump_file);
 	if (ret < 0)
 		goto err;
 
@@ -172,7 +178,7 @@ static int dump_sched_info(int pid, ThreadCoreEntry *tc)
 
 struct cr_imgset *glob_imgset;
 
-static int collect_fds(pid_t pid, struct parasite_drain_fd **dfds)
+static int collect_fds(pid_t pid, pid_t tid, struct parasite_drain_fd **dfds)
 {
 	struct dirent *de;
 	DIR *fd_dir;
@@ -180,10 +186,10 @@ static int collect_fds(pid_t pid, struct parasite_drain_fd **dfds)
 	int n;
 
 	pr_info("\n");
-	pr_info("Collecting fds (pid: %d)\n", pid);
+	pr_info("Collecting fds (pid: %d, tid: %d)\n", pid, tid);
 	pr_info("----------------------------------------\n");
 
-	fd_dir = opendir_proc(pid, "fd");
+	fd_dir = opendir_proc_tid(pid, tid, "fd");
 	if (!fd_dir)
 		return -1;
 
@@ -251,12 +257,12 @@ static int dump_one_reg_file_cond(int lfd, u32 *id, struct fd_parms *parms)
 	return 0;
 }
 
-static int dump_task_exe_link(pid_t pid, MmEntry *mm)
+static int dump_task_exe_link(pid_t pid, pid_t tid, MmEntry *mm)
 {
 	struct fd_parms params;
 	int fd, ret = 0;
 
-	fd = open_proc_path(pid, "exe");
+	fd = open_proc_tid_path(pid, tid, "exe");
 	if (fd < 0)
 		return -1;
 
@@ -269,7 +275,7 @@ static int dump_task_exe_link(pid_t pid, MmEntry *mm)
 	return ret;
 }
 
-static int dump_task_fs(pid_t pid, struct parasite_dump_misc *misc, struct cr_imgset *imgset)
+static int dump_task_fs(pid_t pid, pid_t tid, struct parasite_dump_misc *misc, struct cr_imgset *imgset)
 {
 	struct fd_parms p;
 	FsEntry fe = FS_ENTRY__INIT;
@@ -278,7 +284,7 @@ static int dump_task_fs(pid_t pid, struct parasite_dump_misc *misc, struct cr_im
 	fe.has_umask = true;
 	fe.umask = misc->umask;
 
-	fd = open_proc_path(pid, "cwd");
+	fd = open_proc_tid_path(pid, tid, "cwd");
 	if (fd < 0)
 		return -1;
 
@@ -291,7 +297,7 @@ static int dump_task_fs(pid_t pid, struct parasite_dump_misc *misc, struct cr_im
 
 	close(fd);
 
-	fd = open_proc_path(pid, "root");
+	fd = open_proc_tid_path(pid, tid, "root");
 	if (fd < 0)
 		return -1;
 
@@ -443,7 +449,7 @@ err:
 	return ret;
 }
 
-static int dump_task_mm(pid_t pid, const struct proc_pid_stat *stat,
+static int dump_task_mm(pid_t pid, pid_t tid, const struct proc_pid_stat *stat,
 		const struct parasite_dump_misc *misc,
 		const struct vm_area_list *vma_area_list,
 		const struct cr_imgset *imgset)
@@ -511,7 +517,7 @@ static int dump_task_mm(pid_t pid, const struct proc_pid_stat *stat,
 	if (get_task_auxv(pid, &mme))
 		goto err;
 
-	if (dump_task_exe_link(pid, &mme))
+	if (dump_task_exe_link(pid, tid, &mme))
 		goto err;
 
 	ret = pb_write_one(img_from_set(imgset, CR_FD_MM), &mme, PB_MM);
@@ -594,7 +600,7 @@ static int dump_task_kobj_ids(struct pstree_item *item)
 	int pid = item->pid.real;
 	TaskKobjIdsEntry *ids = item->ids;
 
-	elem.pid = pid;
+	elem.pid = item->trace_pid == 0 ? pid : item->trace_pid;
 	elem.idx = 0; /* really 0 for all */
 	elem.genid = 0; /* FIXME optimize */
 
@@ -971,6 +977,8 @@ static int dump_task_signals(pid_t pid, struct pstree_item *item)
 
 	/* Dump private signals for each thread */
 	for (i = 0; i < item->nr_threads; i++) {
+		if (item->threads[i].state == TASK_DEAD)
+			continue;
 		ret = dump_signal_queue(item->threads[i].real, &item->core[i]->thread_core->signals_p, false);
 		if (ret) {
 			pr_err("Can't dump private signals for thread %d\n", item->threads[i].real);
@@ -979,7 +987,7 @@ static int dump_task_signals(pid_t pid, struct pstree_item *item)
 	}
 
 	/* Dump shared signals */
-	ret = dump_signal_queue(pid, &item->core[0]->tc->signals_s, true);
+	ret = dump_signal_queue(item->trace_pid, &item->core[0]->tc->signals_s, true);
 	if (ret) {
 		pr_err("Can't dump shared signals (pid: %d)\n", pid);
 		return -1;
@@ -1086,7 +1094,7 @@ static int dump_zombies(void)
 	 */
 
 	for_each_pstree_item(item) {
-		if (item->pid.state != TASK_DEAD)
+		if (item->trace_pid != 0)
 			continue;
 
 		if (item->pid.virt < 0) {
@@ -1140,23 +1148,23 @@ static int pre_dump_one_task(struct pstree_item *item)
 		return 0;
 	}
 
-	if (item->pid.state == TASK_DEAD)
+	if (item->trace_pid == 0)
 		return 0;
 
-	ret = collect_mappings(pid, &vmas, NULL);
+	ret = collect_mappings_tid(pid, item->trace_pid, &vmas, NULL);
 	if (ret) {
 		pr_err("Collect mappings (pid: %d) failed with %d\n", pid, ret);
 		goto err;
 	}
 
 	ret = -1;
-	parasite_ctl = parasite_infect_seized(pid, item, &vmas);
+	parasite_ctl = parasite_infect_seized(item->trace_pid, item, &vmas);
 	if (!parasite_ctl) {
 		pr_err("Can't infect (pid: %d) with parasite\n", pid);
 		goto err_free;
 	}
 
-	ret = parasite_fixup_vdso(parasite_ctl, pid, &vmas);
+	ret = parasite_fixup_vdso(parasite_ctl, item->trace_pid, &vmas);
 	if (ret) {
 		pr_err("Can't fixup vdso VMAs (pid: %d)\n", pid);
 		goto err_cure;
@@ -1199,6 +1207,7 @@ err_cure:
 static int dump_one_task(struct pstree_item *item)
 {
 	pid_t pid = item->pid.real;
+	pid_t tid = item->trace_pid;
 	struct vm_area_list vmas;
 	struct parasite_ctl *parasite_ctl;
 	int ret, exit_code = -1;
@@ -1212,10 +1221,10 @@ static int dump_one_task(struct pstree_item *item)
 	vmas.nr = 0;
 
 	pr_info("========================================\n");
-	pr_info("Dumping task (pid: %d)\n", pid);
+	pr_info("Dumping task (pid: %d trace_pid = %d)\n", pid, tid);
 	pr_info("========================================\n");
 
-	if (item->pid.state == TASK_DEAD)
+	if (tid == 0)
 		/*
 		 * zombies are dumped separately in dump_zombies()
 		 */
@@ -1226,7 +1235,7 @@ static int dump_one_task(struct pstree_item *item)
 	if (ret < 0)
 		goto err;
 
-	ret = collect_mappings(pid, &vmas, dump_filemap);
+	ret = collect_mappings_tid(pid, tid, &vmas, dump_filemap);
 	if (ret) {
 		pr_err("Collect mappings (pid: %d) failed with %d\n", pid, ret);
 		goto err;
@@ -1237,7 +1246,7 @@ static int dump_one_task(struct pstree_item *item)
 		if (!dfds)
 			goto err;
 
-		ret = collect_fds(pid, &dfds);
+		ret = collect_fds(pid, tid, &dfds);
 		if (ret) {
 			pr_err("Collect fds (pid: %d) failed with %d\n", pid, ret);
 			goto err;
@@ -1260,7 +1269,7 @@ static int dump_one_task(struct pstree_item *item)
 		goto err;
 	}
 
-	parasite_ctl = parasite_infect_seized(pid, item, &vmas);
+	parasite_ctl = parasite_infect_seized(tid, item, &vmas);
 	if (!parasite_ctl) {
 		pr_err("Can't infect (pid: %d) with parasite\n", pid);
 		goto err;
@@ -1286,7 +1295,7 @@ static int dump_one_task(struct pstree_item *item)
 		close(pfd);
 	}
 
-	ret = parasite_fixup_vdso(parasite_ctl, pid, &vmas);
+	ret = parasite_fixup_vdso(parasite_ctl, tid, &vmas); /// !!!!!
 	if (ret) {
 		pr_err("Can't fixup vdso VMAs (pid: %d)\n", pid);
 		goto err_cure_imgset;
@@ -1388,13 +1397,13 @@ static int dump_one_task(struct pstree_item *item)
 		goto err;
 	}
 
-	ret = dump_task_mm(pid, &pps_buf, &misc, &vmas, cr_imgset);
+	ret = dump_task_mm(pid, tid, &pps_buf, &misc, &vmas, cr_imgset);
 	if (ret) {
 		pr_err("Dump mappings (pid: %d) failed with %d\n", pid, ret);
 		goto err;
 	}
 
-	ret = dump_task_fs(pid, &misc, cr_imgset);
+	ret = dump_task_fs(pid, tid, &misc, cr_imgset);
 	if (ret) {
 		pr_err("Dump fs (pid: %d) failed with %d\n", pid, ret);
 		goto err;

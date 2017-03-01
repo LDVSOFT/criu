@@ -23,7 +23,7 @@ typedef struct {
 
 #define PMC_INIT (pmc_t){ }
 
-extern int pmc_init(pmc_t *pmc, pid_t pid, const struct list_head *vma_head, size_t size);
+extern int pmc_init(pmc_t *pmc, pid_t pid, pid_t tid, const struct list_head *vma_head, size_t size);
 extern u64 *pmc_get_map(pmc_t *pmc, const struct vma_area *vma);
 extern void pmc_fini(pmc_t *pmc);
 
